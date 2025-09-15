@@ -1,0 +1,307 @@
+---
+title: "Impact of 3, 4, or 5 Forwards on Power-Play Effectiveness"
+author: "Peter Johnson"
+date: "06-03-2025"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: united
+    highlight: tango
+    code_folding: hide
+    df_print: paged
+params:
+  question: "How does using 3, 4, or 5 forwards affect power-play effectiveness?"
+---
+
+Power plays are among the highest‐leverage situations in hockey. When the Kings draw a penalty and go 5‐on‐4 or 5‐on‐3, coaches must decide how many forwards versus defensemen to ice. Traditional wisdom favored a 3‐forwards, 2‐defensemen setup (3-2), but recent trends see 4-1 and even 5-0 formations. Each choice shifts both scoring upside and defensive risk. In this analysis we:
+
+1.  Describe every formation the Kings actually deployed and its frequency.
+
+2.  Compare formations on scoring, defensive concessions, and shot‐quality (slot & inner‐slot rates).
+
+3.  Simulate variability in goal outcomes over a typical 100-minute power‐play span.
+
+4.  Uncover which factors most strongly predict scoring.
+
+5.  Offer rich, narrative recommendations for trailing, tied, or leading game states.
+
+## Data Setup
+
+I began by loading the raw data, filtering to the two key manpower scenarios, and computing per-minute rates for goals, goals against, slot shots, and inner-slot shots.
+
+```{r,message=FALSE,warning=FALSE}
+library(tidyverse)
+library(rpart)
+library(rpart.plot)
+library(gt)
+
+pp <- read_csv("powerplay.csv") %>%
+  filter(manpower %in% c(5411,5311)) %>%
+  mutate(
+    manpower   = factor(if_else(manpower == 5411, "5-on-4", "5-on-3")),
+    formation  = factor(paste0(f_cnt, "-", d_cnt)),
+    goals_rate = goals / gamesPlayed,
+    slot_rate  = slotShotAttempts / gamesPlayed,
+    inner_rate = innerSlotShotAttempts / gamesPlayed,
+    ga_rate    = goals_against / gamesPlayed
+  )
+
+summ <- pp %>%
+  group_by(manpower, formation) %>%
+  summarize(
+    conv  = mean(goals_rate, na.rm = TRUE),
+    ga    = mean(ga_rate,    na.rm = TRUE),
+    slot  = mean(slot_rate,  na.rm = TRUE),
+    inner = mean(inner_rate, na.rm = TRUE),
+    snaps = n()
+  ) %>% ungroup()
+```
+
+## Data Description
+
+The data consist of **7,009 power-play** observations recorded by the Kings in which they went on the man-advantage (Power-Play). Each row represents one observation of a specific formation under a given manpower situation, with the following key fields:
+
+```{r}
+tibble(
+  Variable = c(
+    "id", "season", "teamId", "manpower",
+    "f_cnt", "d_cnt", "gamesPlayed", "goals",
+    "shotAttempts", "slotShotAttempts", "innerSlotShotAttempts",
+    "goals_against", "shotAttemptsAgainst",
+    "oz_toi", "dz_toi", "nz_toi"
+  ),
+  Description = c(
+    "Unique identifier for player grouping",
+    "Season end year",
+    "Unique team ID",
+    "Manpower code (5411=5-on-4; 5311=5-on-3)",
+    "Number of forwards on the power play",
+    "Number of defensemen on the power play",
+    "Number of games those players spent together",
+    "Goals scored by that group",
+    "Total shot attempts by that group",
+    "Shot attempts from the slot area",
+    "Shot attempts from the inner-slot area",
+    "Goals conceded while on that power play",
+    "Shot attempts conceded",
+    "Time on ice in offensive zone (seconds)",
+    "Time on ice in defensive zone (seconds)",
+    "Time on ice in neutral zone (seconds)"
+  )
+) %>%
+  gt() %>%
+  tab_header(
+    title = "Dataset Variables",
+    subtitle = "Key columns and their meanings"
+  ) %>%
+  cols_label(
+    Variable    = "**Variable**",
+    Description = "**Description**"
+  )
+```
+
+-   **Rows (observations):** Each corresponds to one observation under a specific formation & manpower.
+
+-   **Columns:** Include game context (`season`, `teamId`), personnel counts (`f_cnt`, `d_cnt`), outcome measures (`goals`, `goals_against`), shot-quality metrics (`slotShotAttempts`, `innerSlotShotAttempts`), and zone time (`oz_toi`, `dz_toi`, `nz_toi`).
+
+All analyses in this report focus on the eight combinations of `manpower` (5-on-4 vs. 5-on-3) and `formation` (`f_cnt`–`d_cnt`) that actually occur in the data.
+
+## Formation Usage Frequency
+
+Before evaluating performance, it is crucial to understand how often each formation was actually used. Rarely attempted formations may produce misleading averages, so we present all for transparency.
+
+```{r,warning=FALSE}
+formation_counts <- summ %>%
+  select(manpower, formation, snaps) %>%
+  arrange(manpower, snaps)
+
+formation_counts %>%
+  gt() %>%
+  tab_header(
+    title    = "Formation Usage Frequency",
+    subtitle = "One-minute power-play snapshots by formation"
+  ) %>%
+  cols_label(
+    manpower  = "Manpower",
+    formation = "Formation",
+    snaps     = "Observations"
+  )
+```
+
+As the table shows, formations like 3-2 on 5-on-4 appear in the thousands, while experiments such as 2-3 on 5-on-3 are far less common. All are included here, but interpretations of the rarer ones should be cautious.
+
+## Formation Performance Summary
+
+Next, we dive into how each formation performed on average, measuring goals scored, goals allowed, and shot‐quality metrics per minute.
+
+```{r,warning=FALSE}
+summ %>%
+  select(manpower, formation, conv, ga, slot, inner, snaps) %>%
+  gt() %>%
+  tab_header(
+    title    = "Formation Performance Summary",
+    subtitle = "Mean rates per power-play minute"
+  ) %>%
+  fmt_number(
+    columns = vars(conv, ga, slot, inner),
+    decimals = 3
+  ) %>%
+  cols_label(
+    manpower  = "Manpower",
+    formation = "Formation",
+    conv      = "Goals/min",
+    ga        = "GA/min",
+    slot      = "Slot Shots/min",
+    inner     = "Inner-Slot Shots/min",
+    snaps     = "Observations"
+  )
+```
+
+On **5-on-4**, 5-0 delivers 0.226 goals per observation but concedes 0.070 GA/obs—indicating high variance. In contrast, 4-1 yields 0.134 goals/obs with only 0.022 GA/obs, and 3-2 posts 0.074/0.009. Under **5-on-3**, 5-0 again leads scoring (0.366/obs) at a small 0.007 GA/obs, while 4-1 (0.251/0) and 3-2 (0.157/0) combine strong offense with perfect defense across their observations.
+
+## Offense vs. Defense Trade-Off
+
+To visualize the balance of scoring and defense, we plot each formation’s goals-for against goals-against per minute.
+
+```{r,warning=FALSE}
+ggplot(summ, aes(x = conv, y = ga, label = formation)) +
+  geom_point(aes(color = formation), size = 4) +
+  geom_text(vjust = -1, show.legend = FALSE) +
+  facet_wrap(~manpower) +
+  labs(
+    title = "Offense vs Defense by Formation",
+    x     = "Goals For per Minute",
+    y     = "Goals Against per Minute"
+  ) +
+  theme_minimal()
+```
+
+On **5-on-4**, **4-1** (0.134/0.022) and **3-2** (0.074/0.009) occupy the efficient upper-left quadrant—strong scoring with limited GA—while **5-0** pushes scoring to 0.226 at the cost of 0.070 GA. The **5-on-3** panel shows **3-2** and **4-1** conceding zero GA, with **5-0** trading a small 0.007 GA for 0.366 goals.
+
+## Net Expected Goals
+
+A single “net” value can simplify decision‐making. We subtract goals‐against from goals‐for to obtain net expected goals per minute.
+
+```{r,warning=FALSE}
+summ %>%
+  mutate(net = conv - ga) %>%
+  ggplot(aes(x = formation, y = net, fill = formation)) +
+  geom_col() +
+  facet_wrap(~manpower) +
+  labs(
+    title = "Net Goals per Minute (Scored − Allowed)",
+    x     = "Formation",
+    y     = "Net Goals/min"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+-   **5-on-4**: 4-1 nets +0.112, 3-2 +0.065, 5-0 +0.156.
+
+-   **5-on-3**: 5-0 nets +0.359, 4-1 +0.251, 3-2 +0.157.
+
+Although 5-0 can deliver the highest net, its elevated GA makes it a more variable choice compared to the steadier 4-1 in both power play scenarios.
+
+## Shot-Quality Breakdown
+
+Inner‐slot attempts carry the highest probability of scoring. The bar chart below compares slot versus inner‐slot shot rates by formation.
+
+```{r,warning=FALSE}
+slot_inner <- summ %>%
+  pivot_longer(c(slot, inner), names_to = "type", values_to = "rate") %>%
+  mutate(type = recode(type, slot = "Slot", inner = "Inner-Slot"))
+
+ggplot(slot_inner, aes(x = formation, y = rate, fill = type)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~manpower) +
+  labs(
+    title = "Slot & Inner-Slot Shot Rates by Formation",
+    x     = "Formation",
+    y     = "Shots per Minute",
+    fill  = ""
+  ) +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2")
+```
+
+The **5-0** formation leads inner-slot creation at 0.747 per observation on 5-on-3 and 0.574 on 5-on-4, while **4-1** and **3-2** trail behind, explaining much of their scoring differences.
+
+## Simulating Scoring Variability
+
+Even the best formation can underperform over short spans. We simulate 200 trials of 100 PP-minutes per formation, treating each minute as a Bernoulli trial with success probability equal to the formation’s mean goal rate.
+
+```{r,warning=FALSE}
+simulate_pp <- function(n_sims, minutes, prob) {
+  replicate(n_sims, sum(runif(minutes) < prob))
+}
+
+set.seed(2025)
+sim <- summ %>%
+  rowwise() %>%
+  mutate(sim_goals = list(simulate_pp(200, 100, conv))) %>%
+  unnest(sim_goals)
+
+ggplot(sim, aes(x = sim_goals, color = formation)) +
+  geom_freqpoly(binwidth = 1) +
+  facet_wrap(~manpower, scales = "free_y") +
+  labs(
+    title = "Simulated Goals in 100 Minutes of PP (200 Sims)",
+    x     = "Goals Scored",
+    y     = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+Despite 5-0’s highest average, its distribution overlaps those of 4-1 and 3-2, highlighting the need to balance upside and variance.
+
+## Variable Importance: Regression Tree
+
+Lastly, I fit a regression tree to quantify which variables best predict goals per minute.
+
+```{r,warning=FALSE}
+tree <- rpart(
+  goals_rate ~ inner_rate + slot_rate + formation + manpower,
+  data = pp,
+  control = rpart.control(cp = 0.01)
+)
+
+imp <- tibble(
+  variable   = names(tree$variable.importance),
+  importance = as.numeric(tree$variable.importance)
+) %>% arrange(desc(importance))
+
+imp %>%
+  ggplot(aes(x = reorder(variable, importance), y = importance)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Variable Importance from Regression Tree",
+    x     = "Predictor",
+    y     = "Importance"
+  ) +
+  theme_minimal()
+```
+
+Slot rate emerges as the top predictor (≈70%), with inner-slot next (≈30%), while formation and manpower play smaller roles—underscoring the primacy of shot volume and location.
+
+## Recommendations
+
+**Trailing Late (Must-Score):**\
+
+Deploy **5-0** to flood the inner slot (0.747 shots/obs on 5-on-3), maximizing scoring chance at the expense of defensive security.
+
+**Tied / Balanced Game:**
+
+-   On **5-on-4**, use **4-1** (0.134 goals/obs, 0.022 GA/obs) for a balanced approach.
+
+-   On **5-on-3**, prefer **4-1** (0.251/0) or **3-2** (0.157/0) to maintain zero GA while scoring well.
+
+**Protecting a Lead:**
+
+-   On **5-on-4**, switch to **2-3** (0.054 goals/obs, 0.016 GA/obs) to minimize risk.
+
+-   On **5-on-3**, lean on **4-1** or **3-2**—both demonstrate zero GA in our sample with reasonable offense.
+
+By treating each observation as a standalone observation and aligning formation choice with game context—maximizing inner-slot chances when chasing goals and emphasizing defense when protecting leads—the Kings can optimize their power play based on any variety of game situations.
