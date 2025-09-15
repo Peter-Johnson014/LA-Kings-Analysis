@@ -1,7 +1,6 @@
 ---
 title: "Impact of 3, 4, or 5 Forwards on Power-Play Effectiveness"
 author: "Peter Johnson"
-date: "06-03-2025"
 output:
   html_document:
     toc: true
@@ -305,3 +304,4 @@ Deploy **5-0** to flood the inner slot (0.747 shots/obs on 5-on-3), maximizing s
 -   On **5-on-3**, lean on **4-1** or **3-2**—both demonstrate zero GA in our sample with reasonable offense.
 
 By treating each observation as a standalone observation and aligning formation choice with game context—maximizing inner-slot chances when chasing goals and emphasizing defense when protecting leads—the Kings can optimize their power play based on any variety of game situations.
+
